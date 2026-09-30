@@ -17,6 +17,7 @@ import {
   RateLimitError,
   TokenExpiredError,
   getUserFollowStatus,
+  getUserProfileUsername,
   sendCommentReply,
   sendDirectMessage,
   sendDirectMessageWithButton,
@@ -26,6 +27,10 @@ import {
   sendPrivateReplyWithLinkButton,
 } from "@/lib/meta/client";
 import { decryptToken } from "@/lib/meta/oauth";
+import {
+  lookupArrivalStatusByIgName,
+  formatArrivalMessage,
+} from "@/lib/pos/arrival-lookup";
 import { matchKeywords } from "@/lib/utils/keyword-matcher";
 import { reserveDMSlot } from "@/lib/utils/rate-limiter";
 import {
@@ -185,6 +190,41 @@ async function sendRevealDirectMessage(
     } catch {
       throw buttonError;
     }
+  }
+}
+
+/**
+ * DM-keyword arrival-lookup reply: resolve the sender's @username, look up
+ * their order status in the self-hosted POS by ig_name, and send that as
+ * plain text instead of the campaign's static dmMessage. Returns false for
+ * any failure to resolve/match/send — the caller falls back to the static
+ * message in that case, so every branch here fails soft, never throws.
+ */
+async function tryArrivalLookupReply(
+  accessToken: string,
+  instagramAccountId: string,
+  senderId: string
+): Promise<boolean> {
+  try {
+    const username = await getUserProfileUsername(accessToken, senderId);
+    if (!username) return false;
+
+    const items = await lookupArrivalStatusByIgName(username);
+    if (items === null) return false;
+
+    await sendDirectMessage(
+      accessToken,
+      instagramAccountId,
+      senderId,
+      formatArrivalMessage(items)
+    );
+    return true;
+  } catch (error) {
+    console.log(
+      "[DM Worker] Arrival lookup reply failed, falling back to static message:",
+      formatError(error)
+    );
+    return false;
   }
 }
 
@@ -1109,18 +1149,34 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
           `followcheck:${automation.id}`
         );
       } else {
-        await sendRevealDirectMessage(
-          accessToken,
-          automation,
-          senderId,
-          commenterName,
-          "message trigger"
-        );
+        const arrivalReplySent = automation.arrivalLookupEnabled
+          ? await tryArrivalLookupReply(
+              accessToken,
+              automation.instagramAccount.instagramId,
+              senderId
+            )
+          : false;
+
+        if (!arrivalReplySent) {
+          await sendRevealDirectMessage(
+            accessToken,
+            automation,
+            senderId,
+            commenterName,
+            "message trigger"
+          );
+        }
 
         // The link has been delivered, so the appreciation follow-up applies
         // here exactly as it does after a button tap. Not scheduled behind the
-        // follow prompt — no link went out yet in that branch.
-        if (automation.followUpEnabled && automation.followUpMessage?.trim()) {
+        // follow prompt — no link went out yet in that branch. Skipped for an
+        // arrival-lookup reply: that flow answers the question outright, so a
+        // "thanks for tapping the link" follow-up would be a non sequitur.
+        if (
+          !arrivalReplySent &&
+          automation.followUpEnabled &&
+          automation.followUpMessage?.trim()
+        ) {
           await getDMQueue().add(
             FOLLOWUP_JOB_NAME,
             {

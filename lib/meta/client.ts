@@ -284,6 +284,33 @@ export async function getUserFollowStatus(
 }
 
 /**
+ * Resolve a DM sender's @username from their IGSID. The inbound-message
+ * webhook only carries the numeric IGSID, so this is required before an
+ * external lookup (e.g. by ig_name) can key off the real handle. Returns
+ * null on any failure — callers must treat that as "can't resolve" and fall
+ * back, not as an error worth surfacing to the customer.
+ */
+export async function getUserProfileUsername(
+  accessToken: string,
+  igsid: string
+): Promise<string | null> {
+  const url = new URL(`${instagramGraphBase()}/${igsid}`);
+  url.searchParams.set("fields", "username");
+
+  try {
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return typeof data?.username === "string" ? data.username : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * A tappable web_url button in a DM button template. Instagram's button
  * template supports up to 3 buttons; titles are capped at 20 chars by Meta.
  */

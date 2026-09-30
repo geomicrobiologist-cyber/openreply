@@ -183,6 +183,13 @@ model Automation {
   // postId / matchAnyPost do not apply to it.
   dmTriggerEnabled Boolean @default(false)
   dmMessage      String
+  // When a DM trigger matches, look up the sender's real order status via the
+  // self-hosted POS's arrival-lookup API (keyed by resolving their IGSID to a
+  // username, then matching customer.ig_name) and reply with that instead of
+  // dmMessage. Falls back to dmMessage whenever the lookup can't resolve a
+  // match (unset POS_ARRIVAL_API_* env vars, unresolved username, no
+  // matching customer, or any request failure).
+  arrivalLookupEnabled Boolean @default(false)
   openingDmEnabled     Boolean @default(false)
   openingDmMessage     String?
   openingDmButtonLabel String?
